@@ -8,6 +8,4 @@ data Decl = Value [String] Expr
           | Ty [(String, [String])]
           deriving Show
 
-data Value = Constructor String [Value]
-
 main = putStrLn $ show $ Variable "mjau"
