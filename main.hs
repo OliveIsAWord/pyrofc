@@ -2,7 +2,7 @@ import Prelude hiding (uncurry)
 
 main = print main_funcy
 
-main_funcy = case pTokens "one two (three four . Option a = | Some a | None . four = three five) five" of
+main_funcy = case pTokens "one (| Meow x = x) two (three four # meow \n . Option a = | Some a | None . four = ( | Some x = x | None = six )) five" of
   Success x _ -> pProgram x
   Failure f -> Failure f
 
@@ -12,9 +12,18 @@ pProgram = pThenIgnore pExpr pEof
 pExpr :: Parser Token Expr
 pExpr = pDecled (pMap (pRepeat1
       (pChoice ExpectedExpr
-        [ pThenIgnore (pIgnoreThen (pElem TParenOpen) pExpr) (pElem TParenClose)
-        , pMap pTIdent Variable
+        [ pParened (pChoice ExpectedExpr [pExpr, (pCase pExpr)])
+        , pMap pTIdent Var
         ])) (foldl1 App))
+
+pCase :: Parser Token Expr -> Parser Token Expr
+pCase pExpr = pMap
+  (pRepeat (pPair
+    (pIgnoreThen (pElem TBar) (pMap (pRepeat1 pTIdent) (\xs -> case xs of
+      [] -> unreachable
+      (x:xs) -> MkPair x xs)))
+    (pIgnoreThen (pElem TEquals) pExpr)))
+  (\cases -> Case cases Nothing)
 
 pDecled pExpr = pMap
   (pPair pExpr (pRepeat
@@ -67,8 +76,14 @@ pToken = pChoice ExpectedToken
   , pMap (pRepeat1 (pElemIf Idk isAlpha)) (\s -> TIdent (Ident s 0))
   ]
 
-pWhitespace :: Parser Char [Char]
-pWhitespace = pRepeat (pElemIf unreachable isWhitespace)
+pWhitespace :: Parser Char [[Char]]
+pWhitespace = pRepeat (pChoice unreachable [pWhitespaceChars, pComment])
+
+pWhitespaceChars :: Parser Char [Char]
+pWhitespaceChars = pRepeat1 (pElemIf Idk isWhitespace)
+
+pComment :: Parser Char [Char]
+pComment = pIgnoreThen (pElem '#') (pRepeat (pElemIf unreachable (/= '\n')))
 
 isWhitespace c = c == ' ' || c == '\n' || c == '\r' || c == '\t'
 isAlpha c = 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z'
@@ -173,9 +188,11 @@ data Token = TIdent Ident
            | TBar
            deriving (Show, Eq)
 
-data Expr = Variable Ident
+data Expr = Var Ident
           | App Expr Expr
-          | Match Expr [(Ident, [Maybe Ident], Expr)] (Maybe (Maybe Ident, Expr))
+          | Case
+            [Pair (Pair Ident [Ident]) Expr]
+            (Maybe (Pair (Maybe Ident) Expr))
           | Where Expr Decl
           deriving (Show, Eq)
 
@@ -202,6 +219,10 @@ instance Eq Ident where
 uncurry f ab = case ab of
   MkPair a b -> f a b
 
+data Triplet a b c = MkTriplet a b c
+  deriving (Show, Eq)
+
 data Pair a b = MkPair a b
+  deriving (Show, Eq)
 
 unreachable = error "unreachable"
