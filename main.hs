@@ -1,10 +1,50 @@
-import Prelude hiding (uncurry)
+import Prelude hiding (uncurry, fst, snd)
 
-main = print main_funcy
+main = case main_funcy of
+  Success x _ -> putStrLn x
+  Failure f -> print f
 
-main_funcy = case pTokens "one (| Meow x = x) two (three four # meow \n . Option a = | Some a | None . four = ( | Some x = x | None = six )) five" of
-  Success x _ -> pProgram x
+main_funcy = case pTokens "map not foo . foo = Some True . not = (| True = False | False = True) . map f = (|Some x = Some (f x) |None = None) . Bool = | True | False . Option a = |Some a |None" of
+  Success x _ -> (pMap pProgram compile) x
   Failure f -> Failure f
+
+compile :: Expr -> String
+compile expr = prelude ++ code ++ "\n\n-- Types\n" ++ compileTys tys
+  where
+    MkPair tys code = go expr
+    go expr = case expr of
+      Var v -> MkPair [] (show v)
+      App a b -> case go a of
+        MkPair atys acode -> case go b of
+          MkPair btys bcode -> MkPair (atys ++ btys) (acode ++ " (" ++ bcode ++ ")")
+      Case cases defaultCase ->
+        MkPair caseTys ("(\\x -> case x of { " ++ caseCodes ++ "})")
+          where
+            caseTys = concatMap fst casePairs
+            caseCodes = concatMap snd casePairs
+            casePairs = map (\arm -> case arm of
+              MkPair pattern body -> case pattern of
+                MkPair name args -> case go body of
+                  MkPair tys code -> MkPair tys (show name ++ concatMap ((' ':) . show) args ++ " -> " ++ code ++ "; ")) cases
+      Where expr decl -> (case decl of
+        ValueDecl name args body -> MkPair (exprTys ++ bodyTys) ("(let { " ++ show name ++ concatMap ((' ':) . show) args ++ " = " ++ bodyCode ++ " } in " ++ exprCode ++  ")") where
+          MkPair bodyTys bodyCode = go body
+        m@(TyDecl _ _ _) -> MkPair (m:exprTys) exprCode)
+          where
+            MkPair exprTys exprCode = go expr
+    compileTys tys = concatMap (('\n':) . compileTy) tys
+    compileTy ty = case ty of
+      TyDecl name args cons -> "data " ++ show name ++ concatMap ((' ':) . show) args ++ (
+        case cons of {Ty t ->
+          case t of
+            [] -> ""
+            (t:ts) -> " = " ++ showField t ++ concatMap (\field -> "\n  | " ++ showField field) ts ++ "\n  deriving (Prelude.Eq, Prelude.Show)\n"})
+        where
+          showField field = case field of
+            TyField name args -> show name ++ concatMap (\x -> " (" ++ showField x ++ ")") args
+      _ -> unreachable
+
+prelude = "import qualified Prelude\nmain = Prelude.print Prelude.$ "
 
 pProgram :: Parser Token Expr
 pProgram = pThenIgnore pExpr pEof
@@ -211,7 +251,7 @@ data TyField = TyField Ident [TyField]
 data Ident = Ident String Int
 
 instance Show Ident where
-  show (Ident name id) = name ++ "_" ++ (show id)
+  show (Ident name id) = name -- ++ "_" ++ (show id)
 
 instance Eq Ident where
   Ident _ a == Ident _ b = a == b
@@ -222,6 +262,12 @@ uncurry f ab = case ab of
 data Triplet a b c = MkTriplet a b c
   deriving (Show, Eq)
 
+fst ab = case ab of
+  MkPair a b -> a
+  
+snd ab = case ab of
+  MkPair a b -> b
+  
 data Pair a b = MkPair a b
   deriving (Show, Eq)
 
