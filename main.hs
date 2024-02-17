@@ -1,4 +1,4 @@
-import Prelude hiding (uncurry, fst, snd)
+import Prelude hiding (uncurry, fst, snd, lookup, zip)
 
 main = case main_funcy of
   Success x _ -> putStrLn x
@@ -9,14 +9,14 @@ main_funcy = case pTokens "map not foo . foo = Some True . not = (| True = False
   Failure f -> Failure f
 
 compile :: Expr -> String
-compile expr = prelude ++ code ++ "\n\n-- Types\n" ++ compileTys tys
+compile expr = prelude ++ code ++ "\n" ++ compileTys tys
   where
     MkPair tys code = go expr
     go expr = case expr of
       Var v -> MkPair [] (show v)
       App a b -> case go a of
         MkPair atys acode -> case go b of
-          MkPair btys bcode -> MkPair (atys ++ btys) (acode ++ " (" ++ bcode ++ ")")
+          MkPair btys bcode -> MkPair (atys ++ btys) ("(" ++ acode ++ " " ++ bcode ++ ")")
       Case cases defaultCase ->
         MkPair caseTys ("(\\x -> case x of { " ++ caseCodes ++ "})")
           where
@@ -45,6 +45,41 @@ compile expr = prelude ++ code ++ "\n\n-- Types\n" ++ compileTys tys
       _ -> unreachable
 
 prelude = "import qualified Prelude\nmain = Prelude.print Prelude.$ "
+
+resolveNames :: Expr -> Either NameError Expr
+resolveNames = go [] where
+  go env expr = case expr of
+    Var v -> case lookup name of
+      Just i -> Right (Var (Ident name i))
+      Nothing -> Left (NotFound name)
+      where name = getName v
+    App a b -> eitherAndThen (go env a) (\a -> eitherMap (go env b) (App a))
+    Where body decl -> case decl of
+      ValueDecl vname vargs vbody -> case allUnique namesSeenByBinding of
+        False -> Left (Conflicting namesSeenByBinding)
+        True -> case go (Ident (getName vname) (length env) : env) body of
+          Left e -> Left e
+          Right body' -> case go (ns ++ env) vbody of
+            Left e -> Left e
+            Right r -> Right (Where body' (newDecl r))
+            where
+              ns = map (uncurry Ident) (zip namesSeenByBinding [length env..])
+              newDecl r = ValueDecl (head ns) (tail ns) r
+        where
+          namesSeenByBinding = map getName (vname:vargs)
+          allUnique names = case names of
+            [] -> True
+            n:ns -> notElem n ns && allUnique ns
+    Case arms fallback -> undefined
+    where
+      lookup name = lookup' name env
+      lookup' name env = case env of
+        [] -> Nothing
+  getName ident = case ident of
+    Ident name _ -> name
+
+data NameError = NotFound String
+               | Conflicting [String]
 
 pProgram :: Parser Token Expr
 pProgram = pThenIgnore pExpr pEof
@@ -251,10 +286,24 @@ data TyField = TyField Ident [TyField]
 data Ident = Ident String Int
 
 instance Show Ident where
-  show (Ident name id) = name -- ++ "_" ++ (show id)
+  show (Ident name id) = name ++ "_" ++ show id
 
 instance Eq Ident where
   Ident _ a == Ident _ b = a == b
+
+zip :: [a] -> [b] -> [Pair a b]
+zip (x:xs) (y:ys) = MkPair x y : zip xs ys
+zip _ _ = []
+
+eitherMap :: Either a b -> (b -> c) -> Either a c
+eitherMap ab f = case ab of
+  Left a -> Left a
+  Right b -> Right (f b)
+  
+eitherAndThen :: Either a b -> (b -> Either a c) -> Either a c
+eitherAndThen ab f = case ab of
+  Left a -> Left a
+  Right b -> f b
 
 uncurry f ab = case ab of
   MkPair a b -> f a b
