@@ -5,6 +5,7 @@
 - String literals
 
 # Undetermined
+- Patterns in bindings
 - List syntax
 - Infix operators
 

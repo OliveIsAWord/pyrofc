@@ -1,14 +1,17 @@
 import Prelude hiding (uncurry, fst, snd, lookup, zip)
 
 main = case main_funcy of
-  Success x _ -> putStrLn x
-  Failure f -> print f
+  Right x -> putStrLn x
+  Left e -> putStrLn e
 
-main_funcy = case pTokens "map not foo . foo = Some True . not = (| True = False | False = True) . map f = (|Some x = Some (f x) |None = None) . Bool = | True | False . Option a = |Some a |None" of
-  Success x _ -> (pMap pProgram compile) x
-  Failure f -> Failure f
+main_funcy = case pTokens "foo . foo = False . Bool = | False | True" of
+  Success x _ -> case pProgram x of
+    Success x _ -> case resolveNames x of
+      Left e -> Left (show e)
+      Right p -> Right (compile p)
+  Failure f -> Left (show f)
 
-compile :: Expr -> String
+compile :: Expr Ident -> String
 compile expr = prelude ++ code ++ "\n" ++ compileTys tys
   where
     MkPair tys code = go expr
@@ -46,52 +49,80 @@ compile expr = prelude ++ code ++ "\n" ++ compileTys tys
 
 prelude = "import qualified Prelude\nmain = Prelude.print Prelude.$ "
 
-resolveNames :: Expr -> Either NameError Expr
-resolveNames = go [] where
-  go env expr = case expr of
-    Var v -> case lookup name of
-      Just i -> Right (Var (Ident name i))
+resolveNames :: Expr String -> Either NameError (Expr Ident)
+resolveNames = go [] [] [] where
+  go valEnv conEnv tyEnv expr = case expr of
+    Var name -> case lookup name valEnv of
+      Just i -> Right (Var i)
       Nothing -> Left (NotFound name)
-      where name = getName v
-    App a b -> eitherAndThen (go env a) (\a -> eitherMap (go env b) (App a))
+    App a b ->
+      eitherAndThen (go valEnv conEnv tyEnv a)
+      (\a -> eitherMap (go valEnv conEnv tyEnv b) (App a))
     Where body decl -> case decl of
-      ValueDecl vname vargs vbody -> case allUnique namesSeenByBinding of
-        False -> Left (Conflicting namesSeenByBinding)
-        True -> case go (Ident (getName vname) (length env) : env) body of
-          Left e -> Left e
-          Right body' -> case go (ns ++ env) vbody of
-            Left e -> Left e
-            Right r -> Right (Where body' (newDecl r))
-            where
-              ns = map (uncurry Ident) (zip namesSeenByBinding [length env..])
-              newDecl r = ValueDecl (head ns) (tail ns) r
+      ValueDecl vname vargs vbody ->
+        eitherAndThen (allUnique namesSeenByBinding)
+        (\() -> eitherAndThen (go (pushEnv vname valEnv) conEnv tyEnv body)
+        (\body' -> eitherAndThen (go (ns ++ valEnv) conEnv tyEnv vbody)
+        (\r -> Right (Where body' (ValueDecl (head ns) (tail ns) r)))))
         where
-          namesSeenByBinding = map getName (vname:vargs)
-          allUnique names = case names of
-            [] -> True
-            n:ns -> notElem n ns && allUnique ns
-    Case arms fallback -> undefined
+          ns = getFresh namesSeenByBinding valEnv
+          namesSeenByBinding = vname:vargs
+      TyDecl name args ty -> case ty of
+        Ty cons ->
+          eitherAndThen bodyMeow
+          (\body' -> eitherMap tyMeow
+          (\ty' -> Where body' (TyDecl name' ccons ty')))
+          where
+            tyMeow = eitherMap (eitherList (map goTy cons)) Ty
+            goTy :: TyField String -> Either NameError (TyField Ident)
+            goTy = undefined
+            bodyMeow = go (vcons ++ valEnv) (ccons ++ conEnv) (name':tyEnv) body
+            vcons = getFresh conIds valEnv
+            ccons = getFresh conIds conEnv
+            name' = head (getFresh [name] tyEnv)
+            conIds = map (\(TyField n _) -> n) cons
+    Case arms fallback -> meow where
+      meow = case head arms of
+        MkPair pattern body -> case pattern of
+          MkPair con args ->
+            eitherAndThen (case lookup con conEnv of
+              Just _ -> Right ()
+              Nothing -> Left (NotFound con))
+            (\() -> eitherAndThen (go (appendEnv args valEnv) conEnv tyEnv body) undefined)
+      
     where
-      lookup name = lookup' name env
-      lookup' name env = case env of
+      lookup name env = case env of
         [] -> Nothing
-  getName ident = case ident of
-    Ident name _ -> name
+        (e:es) -> case name == getName e of
+          True -> Just e
+          False -> lookup name es
+      pushEnv name env = appendEnv [name] env
+      appendEnv names env = getFresh names env ++ env
+      getFresh names env = map (uncurry Ident) (zip names [length env..])
+  getName = (\(Ident name _) -> name)
+  allUnique names = case isUnique names of
+    False -> Left (Conflicting names)
+    True -> Right ()
+    where
+      isUnique names = case names of
+        [] -> True
+        n:ns -> notElem n ns && isUnique ns
 
 data NameError = NotFound String
                | Conflicting [String]
+               deriving (Show, Eq)
 
-pProgram :: Parser Token Expr
+pProgram :: Parser Token (Expr String)
 pProgram = pThenIgnore pExpr pEof
 
-pExpr :: Parser Token Expr
+pExpr :: Parser Token (Expr String)
 pExpr = pDecled (pMap (pRepeat1
       (pChoice ExpectedExpr
         [ pParened (pChoice ExpectedExpr [pExpr, (pCase pExpr)])
         , pMap pTIdent Var
         ])) (foldl1 App))
 
-pCase :: Parser Token Expr -> Parser Token Expr
+pCase :: Parser Token (Expr String) -> Parser Token (Expr String)
 pCase pExpr = pMap
   (pRepeat (pPair
     (pIgnoreThen (pElem TBar) (pMap (pRepeat1 pTIdent) (\xs -> case xs of
@@ -100,6 +131,7 @@ pCase pExpr = pMap
     (pIgnoreThen (pElem TEquals) pExpr)))
   (\cases -> Case cases Nothing)
 
+pDecled :: Parser Token (Expr String) -> Parser Token (Expr String)
 pDecled pExpr = pMap
   (pPair pExpr (pRepeat
     (pMap
@@ -116,7 +148,7 @@ pDecled pExpr = pMap
       (\p -> case p of MkPair idents f -> f idents))))
   (\p -> case p of MkPair expr decls -> foldl Where expr decls)
 
-pTyBody :: Parser Token Ty
+pTyBody :: Parser Token (Ty String)
 pTyBody = pMap (pRepeat1 pTyCon) Ty
 
 pTyCon = pIgnoreThen (pElem TBar) pTyField
@@ -131,7 +163,7 @@ pTyField = pMap
 pParened :: Parser Token a -> Parser Token a
 pParened p = pThenIgnore (pIgnoreThen (pElem TParenOpen) p) (pElem TParenClose)
 
-pTIdent :: Parser Token Ident
+pTIdent :: Parser Token String
 pTIdent = pElemMaybe Idk (\x -> case x of
   TIdent i -> Just i
   _ -> Nothing)
@@ -148,7 +180,7 @@ pToken = pChoice ExpectedToken
   , pTo TParenOpen (pElem '(')
   , pTo TParenClose (pElem ')')
   , pTo TBar (pElem '|')
-  , pMap (pRepeat1 (pElemIf Idk isAlpha)) (\s -> TIdent (Ident s 0))
+  , pMap (pRepeat1 (pElemIf Idk isAlpha)) TIdent
   ]
 
 pWhitespace :: Parser Char [[Char]]
@@ -255,7 +287,7 @@ data ParseFailure = Empty
                   | Idk
                   deriving (Show, Eq)
 
-data Token = TIdent Ident
+data Token = TIdent String
            | TDot
            | TEquals
            | TParenOpen
@@ -263,25 +295,25 @@ data Token = TIdent Ident
            | TBar
            deriving (Show, Eq)
 
-data Expr = Var Ident
-          | App Expr Expr
-          | Case
-            [Pair (Pair Ident [Ident]) Expr]
-            (Maybe (Pair (Maybe Ident) Expr))
-          | Where Expr Decl
-          deriving (Show, Eq)
+data Expr a = Var a
+            | App (Expr a) (Expr a)
+            | Case
+              [Pair (Pair a [a]) (Expr a)]
+              (Maybe (Pair (Maybe a) (Expr a)))
+            | Where (Expr a) (Decl a)
+            deriving (Show, Eq)
 
-data Decl = ValueDecl Ident [Ident] Expr
-          | TyDecl Ident [Ident] Ty
-          deriving (Show, Eq)
+data Decl a = ValueDecl a [a] (Expr a)
+            | TyDecl a [a] (Ty a)
+            deriving (Show, Eq)
 
 -- A type is a list of constructors (represented as type fields)
-newtype Ty = Ty [TyField]
-        deriving (Show, Eq)
+newtype Ty a = Ty [TyField a]
+             deriving (Show, Eq)
 
 -- A type field is a type name followed by any number of type parameters
-data TyField = TyField Ident [TyField]
-             deriving (Show, Eq)
+data TyField a = TyField a [TyField a]
+               deriving (Show, Eq)
 
 data Ident = Ident String Int
 
@@ -294,6 +326,12 @@ instance Eq Ident where
 zip :: [a] -> [b] -> [Pair a b]
 zip (x:xs) (y:ys) = MkPair x y : zip xs ys
 zip _ _ = []
+
+eitherList :: [Either a b] -> Either a [b]
+eitherList x = eitherMap (go [] x) reverse where
+  go as x = case x of
+    [] -> Right []
+    x:xs -> eitherAndThen x (\a -> go (a:as) xs) 
 
 eitherMap :: Either a b -> (b -> c) -> Either a c
 eitherMap ab f = case ab of
