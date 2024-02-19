@@ -1,50 +1,73 @@
-import Prelude hiding (uncurry, fst, snd, lookup, zip)
+main = putStrLn mainFuncy
 
-main = case main_funcy of
-  Right x -> putStrLn x
-  Left e -> putStrLn e
-
-main_funcy = case pTokens "foo . foo = False . Bool = | False | True" of
+mainFuncy = case pTokens "foo . foo = False . Bool = | False | True" of
   Success x _ -> case pProgram x of
     Success x _ -> case resolveNames x of
-      Left e -> Left (show e)
-      Right p -> Right (compile p)
-  Failure f -> Left (show f)
+      Left e -> show e
+      Right p -> compile p
+  Failure f -> show f
 
 compile :: Expr Ident -> String
 compile expr = prelude ++ code ++ "\n" ++ compileTys tys
   where
-    MkPair tys code = go expr
+    (tys, code) = go expr
     go expr = case expr of
-      Var v -> MkPair [] (show v)
+      Var v -> ([], show v)
       App a b -> case go a of
-        MkPair atys acode -> case go b of
-          MkPair btys bcode -> MkPair (atys ++ btys) ("(" ++ acode ++ " " ++ bcode ++ ")")
+        (atys, acode) -> case go b of
+          (btys, bcode) -> (atys ++ btys, "(" ++ acode ++ " " ++ bcode ++ ")")
       Case cases defaultCase ->
-        MkPair caseTys ("(\\x -> case x of { " ++ caseCodes ++ "})")
+        (caseTys, "(\\x -> case x of { " ++ caseCodes ++ "})")
           where
             caseTys = concatMap fst casePairs
             caseCodes = concatMap snd casePairs
-            casePairs = map (\arm -> case arm of
-              MkPair pattern body -> case pattern of
-                MkPair name args -> case go body of
-                  MkPair tys code -> MkPair tys (show name ++ concatMap ((' ':) . show) args ++ " -> " ++ code ++ "; ")) cases
-      Where expr decl -> (case decl of
-        ValueDecl name args body -> MkPair (exprTys ++ bodyTys) ("(let { " ++ show name ++ concatMap ((' ':) . show) args ++ " = " ++ bodyCode ++ " } in " ++ exprCode ++  ")") where
-          MkPair bodyTys bodyCode = go body
-        m@(TyDecl _ _ _) -> MkPair (m:exprTys) exprCode)
+            casePairs = map caseMap cases
+            caseMap = \(pattern, body) -> case pattern of
+              Constructor name args -> case go body of
+                (tys, code) -> (tys,
+                  show name ++
+                  concatMap ((' ':) . show) args ++
+                  " -> " ++
+                  code ++
+                  "; ")
+      Where expr decl ->
+        case decl of
+          ValueDecl name args body ->
+            ( exprTys ++ bodyTys
+            , "(let { " ++
+              show name ++
+              concatMap ((' ':) . show) args ++
+              " = " ++
+              bodyCode ++
+              " } in " ++
+              exprCode ++
+              ")"
+            ) where
+            (bodyTys, bodyCode) = go body
+          m@(TyDecl _ _ _) -> (m:exprTys, exprCode)
           where
-            MkPair exprTys exprCode = go expr
+            (exprTys, exprCode) = go expr
     compileTys tys = concatMap (('\n':) . compileTy) tys
     compileTy ty = case ty of
-      TyDecl name args cons -> "data " ++ show name ++ concatMap ((' ':) . show) args ++ (
-        case cons of {Ty t ->
+      TyDecl name args cons ->
+        "data " ++
+        show name ++
+        concatMap ((' ':) . show) args ++
+        (case cons of {Ty t ->
           case t of
             [] -> ""
-            (t:ts) -> " = " ++ showField t ++ concatMap (\field -> "\n  | " ++ showField field) ts ++ "\n  deriving (Prelude.Eq, Prelude.Show)\n"})
+            (t:ts) ->
+              " = " ++
+              showField t ++
+              concatMap (\field ->
+                "\n  | " ++
+                showField field) ts ++
+                "\n  deriving (Prelude.Eq, Prelude.Show)\n"})
         where
           showField field = case field of
-            TyField name args -> show name ++ concatMap (\x -> " (" ++ showField x ++ ")") args
+            TyField name args ->
+              show name ++
+              concatMap (\x -> " (" ++ showField x ++ ")") args
       _ -> unreachable
 
 prelude = "import qualified Prelude\nmain = Prelude.print Prelude.$ "
@@ -52,7 +75,7 @@ prelude = "import qualified Prelude\nmain = Prelude.print Prelude.$ "
 resolveNames :: Expr String -> Either NameError (Expr Ident)
 resolveNames = go [] [] [] where
   go valEnv conEnv tyEnv expr = case expr of
-    Var name -> case lookup name valEnv of
+    Var name -> case lookupEnv name valEnv of
       Just i -> Right (Var i)
       Nothing -> Left (NotFound name)
     App a b ->
@@ -75,7 +98,7 @@ resolveNames = go [] [] [] where
           where
             tyMeow = eitherMap (eitherList (map goTy cons)) Ty
             goTy :: TyField String -> Either NameError (TyField Ident)
-            goTy = undefined
+            goTy = error "type name resolution"
             bodyMeow = go (vcons ++ valEnv) (ccons ++ conEnv) (name':tyEnv) body
             vcons = getFresh conIds valEnv
             ccons = getFresh conIds conEnv
@@ -83,19 +106,19 @@ resolveNames = go [] [] [] where
             conIds = map (\(TyField n _) -> n) cons
     Case arms fallback -> meow where
       meow = case head arms of
-        MkPair pattern body -> case pattern of
-          MkPair con args ->
-            eitherAndThen (case lookup con conEnv of
+        (pattern, body) -> case pattern of
+          Constructor con args ->
+            eitherAndThen (case lookupEnv con conEnv of
               Just _ -> Right ()
               Nothing -> Left (NotFound con))
-            (\() -> eitherAndThen (go (appendEnv args valEnv) conEnv tyEnv body) undefined)
+            (\() -> eitherAndThen (go (appendEnv args valEnv) conEnv tyEnv body) (error "rest of case name resolution"))
       
     where
-      lookup name env = case env of
+      lookupEnv name env = case env of
         [] -> Nothing
         (e:es) -> case name == getName e of
           True -> Just e
-          False -> lookup name es
+          False -> lookupEnv name es
       pushEnv name env = appendEnv [name] env
       appendEnv names env = getFresh names env ++ env
       getFresh names env = map (uncurry Ident) (zip names [length env..])
@@ -127,9 +150,9 @@ pCase pExpr = pMap
   (pRepeat (pPair
     (pIgnoreThen (pElem TBar) (pMap (pRepeat1 pTIdent) (\xs -> case xs of
       [] -> unreachable
-      (x:xs) -> MkPair x xs)))
+      (x:xs) -> Constructor x xs)))
     (pIgnoreThen (pElem TEquals) pExpr)))
-  (\cases -> Case cases Nothing)
+  (\con -> Case con Nothing)
 
 pDecled :: Parser Token (Expr String) -> Parser Token (Expr String)
 pDecled pExpr = pMap
@@ -138,15 +161,15 @@ pDecled pExpr = pMap
       (pPair
         (pMap
           (pThenIgnore (pIgnoreThen (pElem TDot) (pRepeat1 pTIdent)) (pElem TEquals))
-          (\xs -> case xs of [] -> unreachable; (y:ys) -> MkPair y ys))
+          (\xs -> case xs of [] -> unreachable; (y:ys) -> (y, ys)))
         (pChoice ExpectedDecl
           [ (pMap pExpr (\expr decls -> case decls of
-              MkPair name args -> ValueDecl name args expr))
+              (name, args) -> ValueDecl name args expr))
           , (pMap pTyBody (\ty decls -> case decls of
-              MkPair name args -> TyDecl name args ty))
+              (name, args) -> TyDecl name args ty))
           ]))
-      (\p -> case p of MkPair idents f -> f idents))))
-  (\p -> case p of MkPair expr decls -> foldl Where expr decls)
+      (\(idents, f) -> f idents))))
+  (\(expr, decls) -> foldl Where expr decls)
 
 pTyBody :: Parser Token (Ty String)
 pTyBody = pMap (pRepeat1 pTyCon) Ty
@@ -236,10 +259,13 @@ pExact original = go original where
   go xs str = case xs of
     [] -> Success original str
     (y:ys) -> case str of
-      [] -> undefined
+      [] -> Failure Empty
+      (z:zs) -> case y == z of
+        True -> go ys zs
+        False -> Failure MismatchedCharacter
 
-pPair :: Parser s a -> Parser s b -> Parser s (Pair a b)
-pPair pa pb = pAndThen pa (\a -> pMap pb (\b -> MkPair a b))
+pPair :: Parser s a -> Parser s b -> Parser s (a, b)
+pPair pa pb = pAndThen pa (\a -> pMap pb (\b -> (a, b)))
 
 pAndThen :: Parser s a -> (a -> Parser s b) -> Parser s b
 pAndThen pa pb str =
@@ -298,10 +324,13 @@ data Token = TIdent String
 data Expr a = Var a
             | App (Expr a) (Expr a)
             | Case
-              [Pair (Pair a [a]) (Expr a)]
-              (Maybe (Pair (Maybe a) (Expr a)))
+              [(Pattern a, Expr a)]
+              (Maybe (Maybe a, Expr a))
             | Where (Expr a) (Decl a)
             deriving (Show, Eq)
+
+data Pattern a = Constructor a [a]
+               deriving (Show, Eq)
 
 data Decl a = ValueDecl a [a] (Expr a)
             | TyDecl a [a] (Ty a)
@@ -323,10 +352,6 @@ instance Show Ident where
 instance Eq Ident where
   Ident _ a == Ident _ b = a == b
 
-zip :: [a] -> [b] -> [Pair a b]
-zip (x:xs) (y:ys) = MkPair x y : zip xs ys
-zip _ _ = []
-
 eitherList :: [Either a b] -> Either a [b]
 eitherList x = eitherMap (go [] x) reverse where
   go as x = case x of
@@ -342,20 +367,5 @@ eitherAndThen :: Either a b -> (b -> Either a c) -> Either a c
 eitherAndThen ab f = case ab of
   Left a -> Left a
   Right b -> f b
-
-uncurry f ab = case ab of
-  MkPair a b -> f a b
-
-data Triplet a b c = MkTriplet a b c
-  deriving (Show, Eq)
-
-fst ab = case ab of
-  MkPair a b -> a
-  
-snd ab = case ab of
-  MkPair a b -> b
-  
-data Pair a b = MkPair a b
-  deriving (Show, Eq)
 
 unreachable = error "unreachable"
