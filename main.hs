@@ -1,11 +1,26 @@
-main = putStrLn mainFuncy
+import System.Environment (getArgs, getProgName)
+import System.Exit (exitFailure)
 
-mainFuncy = case pTokens "foo . foo = False . Bool = | False | True" of
+main :: IO ()
+main = do
+  args <- getArgs
+  case args of
+    [filePath] -> do
+      contents <- readFile filePath
+      let result = mainFuncy contents
+      putStrLn result
+    _ -> do
+      name <- getProgName
+      putStrLn $ "Usage: " ++ name ++ " <filepath>"
+      exitFailure
+
+mainFuncy :: String -> String
+mainFuncy source = case pTokens source of
   Success x _ -> case pProgram x of
     Success x _ -> case resolveNames x of
-      Left e -> show e
+      Left e -> error (show e)
       Right p -> compile p
-  Failure f -> show f
+  Failure f -> error (show f)
 
 compile :: Expr Ident -> String
 compile expr = prelude ++ code ++ "\n" ++ compileTys tys
