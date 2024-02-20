@@ -18,7 +18,7 @@ map not (Some False) # evaluates to Some True
   | None
 ```
 
-This repo is home to the Pyrotelekinetic Flazzy Compiler. To run:
+This repo is home to the Pyrotelekinetic Flazzy Compiler. It is not yet in a working state (hopefully it will be soon!). To build and run:
 
 ```sh
 ghc main -o pyrofc && ./pyrofc example.flazzy
