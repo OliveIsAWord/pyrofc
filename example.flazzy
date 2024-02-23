@@ -1,1 +1,16 @@
-foo . foo = False . Bool = | False | True
+# foo (foo . foo = foo) (foo . foo = foo) . foo = foo
+# foo . foo = False . Bool = | False | True
+
+map not (Some False) # evaluates to Some True
+. not = (
+  | True = False
+  | False = True)
+. map f = (
+  | Some x = Some (f x)
+  | None = None)
+. Bool =
+  | False
+  | True
+. Option a =
+  | Some a
+  | None

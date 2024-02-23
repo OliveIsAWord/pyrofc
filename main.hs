@@ -1,6 +1,9 @@
 import System.Environment (getArgs, getProgName)
 import System.Exit (exitFailure)
 
+import Prelude hiding (length)
+import Debug.Trace
+
 main :: IO ()
 main = do
   args <- getArgs
@@ -87,56 +90,66 @@ compile expr = prelude ++ code ++ "\n" ++ compileTys tys
 
 prelude = "import qualified Prelude\nmain = Prelude.print Prelude.$ "
 
+-- tt :: (Show a) => a -> a
+-- tt = traceShowId
+
 resolveNames :: Expr String -> Either NameError (Expr Ident)
-resolveNames = go [] [] [] where
-  go valEnv conEnv tyEnv expr = case expr of
-    Var name -> case lookupEnv name valEnv of
-      Just i -> Right (Var i)
-      Nothing -> Left (NotFound name)
+resolveNames expr = eitherMap (go [] [] [] 0 expr) fst where
+  go :: [Ident] -> [Ident] -> [Ident] -> Integer -> Expr String -> Either NameError (Expr Ident, Integer)
+  go valEnv conEnv tyEnv i expr = case expr of
+    Var name -> eitherMap (lookupEnv name valEnv) (\n -> (Var n, i))
     App a b ->
-      eitherAndThen (go valEnv conEnv tyEnv a)
-      (\a -> eitherMap (go valEnv conEnv tyEnv b) (App a))
+      eitherAndThen (go valEnv conEnv tyEnv i a)
+      (\(a, i) -> eitherMap (go valEnv conEnv tyEnv i b) (first (App a)))
     Where body decl -> case decl of
       ValueDecl vname vargs vbody ->
         eitherAndThen (allUnique namesSeenByBinding)
-        (\() -> eitherAndThen (go (pushEnv vname valEnv) conEnv tyEnv body)
-        (\body' -> eitherAndThen (go (ns ++ valEnv) conEnv tyEnv vbody)
-        (\r -> Right (Where body' (ValueDecl (head ns) (tail ns) r)))))
+        (\() -> eitherAndThen (go (head ns : valEnv) conEnv tyEnv i0 body)
+        (\(body', i1) -> eitherAndThen (go (ns ++ valEnv) conEnv tyEnv i1 vbody)
+        (\(r, i2) -> Right (Where body' (ValueDecl (head ns) (tail ns) r), i2))))
         where
-          ns = getFresh namesSeenByBinding valEnv
+          (ns, i0) = getFresh namesSeenByBinding i
           namesSeenByBinding = vname:vargs
       TyDecl name args ty -> case ty of
         Ty cons ->
-          eitherAndThen bodyMeow
-          (\body' -> eitherMap tyMeow
-          (\ty' -> Where body' (TyDecl name' ccons ty')))
+          eitherAndThen (allUnique (name : args ++ conIds))
+          (\() -> eitherAndThen bodyMeow
+          (\(body', i3) -> eitherMap (tyMeow (name' : args' ++ tyEnv))
+          (\ty' -> (Where body' (TyDecl name' args' ty'), i3))))
           where
-            tyMeow = eitherMap (eitherList (map goTy cons)) Ty
-            goTy :: TyField String -> Either NameError (TyField Ident)
-            goTy = error "type name resolution"
-            bodyMeow = go (vcons ++ valEnv) (ccons ++ conEnv) (name':tyEnv) body
-            vcons = getFresh conIds valEnv
-            ccons = getFresh conIds conEnv
-            name' = head (getFresh [name] tyEnv)
-            conIds = map (\(TyField n _) -> n) cons
-    Case arms fallback -> meow where
-      meow = case head arms of
-        (pattern, body) -> case pattern of
-          Constructor con args ->
-            eitherAndThen (case lookupEnv con conEnv of
-              Just _ -> Right ()
-              Nothing -> Left (NotFound con))
-            (\() -> eitherAndThen (go (appendEnv args valEnv) conEnv tyEnv body) (error "rest of case name resolution"))
+            tyMeow :: [Ident] -> Either NameError (Ty Ident)
+            tyMeow tyEnv = eitherMap (eitherList (map (\(TyField _ fields) -> eitherList (map visitTyField fields)) cons)) (\conFields -> Ty (map (uncurry TyField) (zip cons' conFields)))
+              where
+                visitTyField :: TyField String -> Either NameError (TyField Ident)
+                visitTyField =
+                  (\(TyField name args) -> eitherAndThen (lookupEnv name tyEnv)
+                  (\name' -> eitherMap
+                    (eitherList (map visitTyField args))
+                    (TyField name')))
+            bodyMeow = go (cons' ++ valEnv) (cons' ++ conEnv) (name' : tyEnv) i2 body
+            (cons', i2) = getFresh conIds i1
+            (args', i1) = getFresh args i0
+            (name', i0) = (Ident name i, i + 1)
+            conIds = map (\(TyField x _) -> x) cons
+    Case arms _fallback -> eitherMap
+      (eitherFoldr (\arm -> (\(arms, ii) -> eitherMap (meow i arm) (\(conny, ii) -> (conny:arms, ii)))) ([], i) arms)
+      (\(arms, ii) -> (Case arms Nothing, ii)) where
+      meow :: Integer -> (Pattern String, Expr String) -> Either NameError ((Pattern Ident, Expr Ident), Integer)
+      meow i = \(pattern, body) -> case pattern of
+        Constructor con args ->
+          eitherAndThen (lookupEnv con conEnv)
+          (\con' -> eitherAndThen (eitherMap (allUnique (con : args))
+          (\() -> getFresh args i))
+          (\(args', i0) -> eitherMap (go (args' ++ valEnv) conEnv tyEnv i0 body)
+          (\(body', i1) -> ((Constructor con' args', body'), i1))))
       
     where
       lookupEnv name env = case env of
-        [] -> Nothing
+        [] -> Left (NotFound name)
         (e:es) -> case name == getName e of
-          True -> Just e
+          True -> Right e
           False -> lookupEnv name es
-      pushEnv name env = appendEnv [name] env
-      appendEnv names env = getFresh names env ++ env
-      getFresh names env = map (uncurry Ident) (zip names [length env..])
+      getFresh names i = (map (uncurry Ident) (zip names [i..]), length names + i)
   getName = (\(Ident name _) -> name)
   allUnique names = case isUnique names of
     False -> Left (Conflicting names)
@@ -359,7 +372,7 @@ newtype Ty a = Ty [TyField a]
 data TyField a = TyField a [TyField a]
                deriving (Show, Eq)
 
-data Ident = Ident String Int
+data Ident = Ident String Integer
 
 instance Show Ident where
   show (Ident name id) = name ++ "_" ++ show id
@@ -367,11 +380,30 @@ instance Show Ident where
 instance Eq Ident where
   Ident _ a == Ident _ b = a == b
 
+length :: [a] -> Integer
+length = go 0 where
+  go i xs = case xs of
+    [] -> i
+    (_:ys) -> go (i + 1) ys
+
+first :: (a -> a') -> (a, b) -> (a', b)
+first f = \(a, b) -> (f a, b)
+
+eitherFoldr :: (a -> b -> Either e b) -> b -> [a] -> Either e b
+eitherFoldr f acc xs = case xs of
+  [] -> Right acc
+  x:xs -> eitherAndThen (eitherFoldr f acc xs) (f x)
+
 eitherList :: [Either a b] -> Either a [b]
-eitherList x = eitherMap (go [] x) reverse where
+eitherList x = go [] x where
   go as x = case x of
-    [] -> Right []
-    x:xs -> eitherAndThen x (\a -> go (a:as) xs) 
+    [] -> Right (reverse as)
+    x:xs -> eitherAndThen x (\a -> go (a:as) xs)
+
+eitherOr :: Either a b -> Either c b -> Either c b
+eitherOr ab cb = case ab of
+  Left _ -> cb
+  Right a -> Right a
 
 eitherMap :: Either a b -> (b -> c) -> Either a c
 eitherMap ab f = case ab of

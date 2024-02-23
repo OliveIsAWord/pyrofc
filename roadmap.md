@@ -1,3 +1,6 @@
+# Refactor
+- Use `Integer` instead of `Int`
+
 # Instrumental to Self-Hosting
 - Name resolution
 - Type checking
