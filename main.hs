@@ -2,7 +2,6 @@ import System.Environment (getArgs, getProgName)
 import System.Exit (exitFailure)
 
 import Prelude hiding (length)
-import Debug.Trace
 
 main :: IO ()
 main = do
@@ -23,6 +22,7 @@ mainFuncy source = case pTokens source of
     Success x _ -> case resolveNames x of
       Left e -> error (show e)
       Right p -> compile p
+    Failure f -> error (show f)
   Failure f -> error (show f)
 
 compile :: Expr Ident -> String
@@ -34,7 +34,7 @@ compile expr = prelude ++ code ++ "\n" ++ compileTys tys
       App a b -> case go a of
         (atys, acode) -> case go b of
           (btys, bcode) -> (atys ++ btys, "(" ++ acode ++ " " ++ bcode ++ ")")
-      Case cases defaultCase ->
+      Case cases ->
         (caseTys, "(\\x -> case x of { " ++ caseCodes ++ "})")
           where
             caseTys = concatMap fst casePairs
@@ -131,9 +131,9 @@ resolveNames expr = eitherMap (go [] [] [] 0 expr) fst where
             (args', i1) = getFresh args i0
             (name', i0) = (Ident name i, i + 1)
             conIds = map (\(TyField x _) -> x) cons
-    Case arms _fallback -> eitherMap
-      (eitherFoldr (\arm -> (\(arms, ii) -> eitherMap (meow i arm) (\(conny, ii) -> (conny:arms, ii)))) ([], i) arms)
-      (\(arms, ii) -> (Case arms Nothing, ii)) where
+    Case arms -> eitherMap
+      (eitherFoldr (\arm -> (\(arms, ii) -> eitherMap (meow ii arm) (\(conny, iii) -> (conny:arms, iii)))) ([], i) arms)
+      (\(arms, ii) -> (Case arms, ii)) where
       meow :: Integer -> (Pattern String, Expr String) -> Either NameError ((Pattern Ident, Expr Ident), Integer)
       meow i = \(pattern, body) -> case pattern of
         Constructor con args ->
@@ -180,7 +180,7 @@ pCase pExpr = pMap
       [] -> unreachable
       (x:xs) -> Constructor x xs)))
     (pIgnoreThen (pElem TEquals) pExpr)))
-  (\con -> Case con Nothing)
+  Case
 
 pDecled :: Parser Token (Expr String) -> Parser Token (Expr String)
 pDecled pExpr = pMap
@@ -282,8 +282,8 @@ pChoice fail ps = go ps where
       Success x xs -> Success x xs
       Failure _ -> go ps str
 
-pExact :: Eq s => [s] -> Parser s [s]
-pExact original = go original where
+_pExact :: Eq s => [s] -> Parser s [s]
+_pExact original = go original where
   go xs str = case xs of
     [] -> Success original str
     (y:ys) -> case str of
@@ -351,13 +351,12 @@ data Token = TIdent String
 
 data Expr a = Var a
             | App (Expr a) (Expr a)
-            | Case
-              [(Pattern a, Expr a)]
-              (Maybe (Maybe a, Expr a))
+            | Case [(Pattern a, Expr a)]
             | Where (Expr a) (Decl a)
             deriving (Show, Eq)
 
 data Pattern a = Constructor a [a]
+               -- | Variable a
                deriving (Show, Eq)
 
 data Decl a = ValueDecl a [a] (Expr a)
@@ -400,8 +399,8 @@ eitherList x = go [] x where
     [] -> Right (reverse as)
     x:xs -> eitherAndThen x (\a -> go (a:as) xs)
 
-eitherOr :: Either a b -> Either c b -> Either c b
-eitherOr ab cb = case ab of
+_eitherOr :: Either a b -> Either c b -> Either c b
+_eitherOr ab cb = case ab of
   Left _ -> cb
   Right a -> Right a
 

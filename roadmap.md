@@ -1,8 +1,4 @@
-# Refactor
-- Use `Integer` instead of `Int`
-
 # Instrumental to Self-Hosting
-- Name resolution
 - Type checking
 - `Char` primitive
 - String literals
@@ -15,7 +11,7 @@
 - Infix operators
 - Infix constructors
 
-# After Self-Hosting
+# After Self-Hosting (speculative)
 - Mutually recursive bindings
 - Pitch black formatter
 - Module system
