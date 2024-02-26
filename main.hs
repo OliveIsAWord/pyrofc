@@ -48,6 +48,12 @@ compile expr = prelude ++ code ++ "\n" ++ compileTys tys
                   " -> " ++
                   code ++
                   "; ")
+              Variable v -> case go body of
+                (tys, code) -> (tys,
+                  show v ++
+                  " -> " ++
+                  code ++
+                  ";")
       Where expr decl ->
         case decl of
           ValueDecl name args body ->
@@ -142,6 +148,10 @@ resolveNames expr = eitherMap (go [] [] [] 0 expr) fst where
           (\() -> getFresh args i))
           (\(args', i0) -> eitherMap (go (args' ++ valEnv) conEnv tyEnv i0 body)
           (\(body', i1) -> ((Constructor con' args', body'), i1))))
+        Variable v ->
+          eitherMap
+            (go (Ident v i : valEnv) conEnv tyEnv (i + 1) body)
+            (\(body', i0) -> ((Variable (Ident v i), body'), i0))
       
     where
       lookupEnv name env = case env of
@@ -170,33 +180,35 @@ pExpr :: Parser Token (Expr String)
 pExpr = pDecled (pMap (pRepeat1
       (pChoice ExpectedExpr
         [ pParened (pChoice ExpectedExpr [pExpr, (pCase pExpr)])
-        , pMap pTIdent Var
+        , pMap pTIdentEither Var
         ])) (foldl1 App))
 
 pCase :: Parser Token (Expr String) -> Parser Token (Expr String)
 pCase pExpr = pMap
   (pRepeat (pPair
-    (pIgnoreThen (pElem TBar) (pMap (pRepeat1 pTIdent) (\xs -> case xs of
-      [] -> unreachable
-      (x:xs) -> Constructor x xs)))
+    (pIgnoreThen (pElem TBar) (pChoice Idk
+      [ (pMap
+          (pPair pTIdentUpper (pRepeat pTIdentLower))
+          (uncurry Constructor))
+      , (pMap pTIdentLower Variable)
+      ]))
     (pIgnoreThen (pElem TEquals) pExpr)))
   Case
 
 pDecled :: Parser Token (Expr String) -> Parser Token (Expr String)
 pDecled pExpr = pMap
-  (pPair pExpr (pRepeat
-    (pMap
-      (pPair
-        (pMap
-          (pThenIgnore (pIgnoreThen (pElem TDot) (pRepeat1 pTIdent)) (pElem TEquals))
-          (\xs -> case xs of [] -> unreachable; (y:ys) -> (y, ys)))
-        (pChoice ExpectedDecl
-          [ (pMap pExpr (\expr decls -> case decls of
-              (name, args) -> ValueDecl name args expr))
-          , (pMap pTyBody (\ty decls -> case decls of
-              (name, args) -> TyDecl name args ty))
-          ]))
-      (\(idents, f) -> f idents))))
+  (pPair pExpr (pRepeat (pIgnoreThen (pElem TDot) (pChoice ExpectedDecl
+    [ pMap
+        (pPair
+          (pThenIgnore (pRepeat1 pTIdentLower) (pElem TEquals))
+          pExpr)
+        (\(names, expr) -> ValueDecl (head names) (tail names) expr)
+    , pMap
+        (pPair
+          (pThenIgnore (pPair pTIdentUpper (pRepeat pTIdentLower)) (pElem TEquals))
+          pTyBody)
+        (\(names, body) -> case names of (name, args) -> TyDecl name args body)
+    ]))))
   (\(expr, decls) -> foldl Where expr decls)
 
 pTyBody :: Parser Token (Ty String)
@@ -205,8 +217,8 @@ pTyBody = pMap (pRepeat1 pTyCon) Ty
 pTyCon = pIgnoreThen (pElem TBar) pTyField
 
 pTyField = pMap
-  (pPair pTIdent (pRepeat (pChoice ExpectedTyField
-    [ pTyField
+  (pPair pTIdentUpper (pRepeat (pChoice ExpectedTyField
+    [ pMap pTIdentEither (\a -> TyField a [])
     , pParened pTyField
     ])))
   (uncurry TyField)
@@ -214,9 +226,16 @@ pTyField = pMap
 pParened :: Parser Token a -> Parser Token a
 pParened p = pThenIgnore (pIgnoreThen (pElem TParenOpen) p) (pElem TParenClose)
 
-pTIdent :: Parser Token String
-pTIdent = pElemMaybe Idk (\x -> case x of
-  TIdent i -> Just i
+pTIdentEither = pChoice Idk [pTIdentUpper, pTIdentLower]
+
+pTIdentUpper :: Parser Token String
+pTIdentUpper = pElemMaybe Idk (\x -> case x of
+  TIdentUpper i -> Just i
+  _ -> Nothing)
+  
+pTIdentLower :: Parser Token String
+pTIdentLower = pElemMaybe Idk (\x -> case x of
+  TIdentLower i -> Just i
   _ -> Nothing)
 
 pTokens :: Parser Char [Token]
@@ -231,7 +250,9 @@ pToken = pChoice ExpectedToken
   , pTo TParenOpen (pElem '(')
   , pTo TParenClose (pElem ')')
   , pTo TBar (pElem '|')
-  , pMap (pRepeat1 (pElemIf Idk isAlpha)) TIdent
+  , pMap (pRepeat1 (pElemIf Idk isAlpha)) (\ident -> case isUpper (head ident) of
+    True -> TIdentUpper ident
+    False -> TIdentLower ident)
   ]
 
 pWhitespace :: Parser Char [[Char]]
@@ -244,7 +265,9 @@ pComment :: Parser Char [Char]
 pComment = pIgnoreThen (pElem '#') (pRepeat (pElemIf unreachable (/= '\n')))
 
 isWhitespace c = c == ' ' || c == '\n' || c == '\r' || c == '\t'
-isAlpha c = 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z'
+isAlpha c = isUpper c || isLower c
+isUpper c = 'A' <= c && c <= 'Z'
+isLower c = 'a' <= c && c <= 'z'
 
 pRepeat1 :: Parser s a -> Parser s [a]
 pRepeat1 p str = case p str of
@@ -341,7 +364,8 @@ data ParseFailure = Empty
                   | Idk
                   deriving (Show, Eq)
 
-data Token = TIdent String
+data Token = TIdentLower String
+           | TIdentUpper String
            | TDot
            | TEquals
            | TParenOpen
@@ -356,7 +380,7 @@ data Expr a = Var a
             deriving (Show, Eq)
 
 data Pattern a = Constructor a [a]
-               -- | Variable a
+               | Variable a
                deriving (Show, Eq)
 
 data Decl a = ValueDecl a [a] (Expr a)
