@@ -25,6 +25,8 @@ mainFuncy source = case pTokens source of
     Failure f -> error (show f)
   Failure f -> error (show f)
 
+-- Haskell codegen
+
 compile :: Expr Ident -> String
 compile expr = prelude ++ code ++ "\n" ++ compileTys tys
   where
@@ -96,8 +98,7 @@ compile expr = prelude ++ code ++ "\n" ++ compileTys tys
 
 prelude = "import qualified Prelude\nmain = Prelude.print Prelude.$ "
 
--- tt :: (Show a) => a -> a
--- tt = traceShowId
+-- Name resolution
 
 resolveNames :: Expr String -> Either NameError (Expr Ident)
 resolveNames expr = eitherMap (go [] [] [] 0 expr) fst where
@@ -173,6 +174,16 @@ data NameError = NotFound String
                | Conflicting [String]
                deriving (Show, Eq)
 
+data Ident = Ident String Integer
+
+instance Show Ident where
+  show (Ident name id) = name ++ "_" ++ show id
+
+instance Eq Ident where
+  Ident _ a == Ident _ b = a == b
+
+-- Parsing
+
 pProgram :: Parser Token (Expr String)
 pProgram = pThenIgnore pExpr pEof
 
@@ -238,10 +249,37 @@ pTIdentLower = pElemMaybe Idk (\x -> case x of
   TIdentLower i -> Just i
   _ -> Nothing)
 
+data Expr a = Var a
+            | App (Expr a) (Expr a)
+            | Case [(Pattern a, Expr a)]
+            | Where (Expr a) (Decl a)
+            deriving (Show, Eq)
+
+data Pattern a = Constructor a [a]
+               | Variable a
+               deriving (Show, Eq)
+
+data Decl a = ValueDecl a [a] (Expr a)
+            | TyDecl a [a] (Ty a)
+            deriving (Show, Eq)
+
+-- A type is a list of constructors (represented as type fields)
+newtype Ty a = Ty [TyField a]
+             deriving (Show, Eq)
+
+-- A type field is a type name followed by any number of type parameters
+data TyField a = TyField a [TyField a]
+               deriving (Show, Eq)
+
+-- Lexing
+
 pTokens :: Parser Char [Token]
 pTokens = pThenIgnore
   (pRepeat (pIgnoreThen pWhitespace pToken))
   (pIgnoreThen pWhitespace pEof)
+
+pComment :: Parser Char [Char]
+pComment = pIgnoreThen (pElem '#') (pRepeat (pElemIf unreachable (/= '\n')))
 
 pToken :: Parser Char Token
 pToken = pChoice ExpectedToken
@@ -255,14 +293,22 @@ pToken = pChoice ExpectedToken
     False -> TIdentLower ident)
   ]
 
+data Token = TIdentLower String
+           | TIdentUpper String
+           | TDot
+           | TEquals
+           | TParenOpen
+           | TParenClose
+           | TBar
+           deriving (Show, Eq)
+
+-- Parser combinators
+
 pWhitespace :: Parser Char [[Char]]
 pWhitespace = pRepeat (pChoice unreachable [pWhitespaceChars, pComment])
 
 pWhitespaceChars :: Parser Char [Char]
 pWhitespaceChars = pRepeat1 (pElemIf Idk isWhitespace)
-
-pComment :: Parser Char [Char]
-pComment = pIgnoreThen (pElem '#') (pRepeat (pElemIf unreachable (/= '\n')))
 
 isWhitespace c = c == ' ' || c == '\n' || c == '\r' || c == '\t'
 isAlpha c = isUpper c || isLower c
@@ -364,44 +410,7 @@ data ParseFailure = Empty
                   | Idk
                   deriving (Show, Eq)
 
-data Token = TIdentLower String
-           | TIdentUpper String
-           | TDot
-           | TEquals
-           | TParenOpen
-           | TParenClose
-           | TBar
-           deriving (Show, Eq)
-
-data Expr a = Var a
-            | App (Expr a) (Expr a)
-            | Case [(Pattern a, Expr a)]
-            | Where (Expr a) (Decl a)
-            deriving (Show, Eq)
-
-data Pattern a = Constructor a [a]
-               | Variable a
-               deriving (Show, Eq)
-
-data Decl a = ValueDecl a [a] (Expr a)
-            | TyDecl a [a] (Ty a)
-            deriving (Show, Eq)
-
--- A type is a list of constructors (represented as type fields)
-newtype Ty a = Ty [TyField a]
-             deriving (Show, Eq)
-
--- A type field is a type name followed by any number of type parameters
-data TyField a = TyField a [TyField a]
-               deriving (Show, Eq)
-
-data Ident = Ident String Integer
-
-instance Show Ident where
-  show (Ident name id) = name ++ "_" ++ show id
-
-instance Eq Ident where
-  Ident _ a == Ident _ b = a == b
+-- Utility definitions
 
 length :: [a] -> Integer
 length = go 0 where
