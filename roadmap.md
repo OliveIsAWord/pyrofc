@@ -3,6 +3,14 @@
 - `Char` primitive
 - String literals
 
+# Valuable to Self-Hosting
+- Type annotations
+- Function type syntax
+- Type aliases
+- Underscore identifiers
+- Proper parsing errors
+- Source location in errors
+
 # Undetermined
 - Higher arity lambdas
 - Patterns in bindings
@@ -10,6 +18,7 @@
 - List syntax
 - Infix operators
 - Infix constructors
+- Integer primitive
 
 # After Self-Hosting (speculative)
 - Mutually recursive bindings

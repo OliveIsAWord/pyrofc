@@ -9,12 +9,12 @@ outputs = { self, nixpkgs }: let
 in {
   packages = allSystems (pkgs: {
     default = pkgs.stdenvNoCC.mkDerivation (finalAttrs: {
-      pname = "bee";
+      pname = "pyrofc";
       version = "0.0.0";
       src = ./.;
       nativeBuildInputs = [ pkgs.ghc ];
-      buildPhase = "ghc main.hs";
-      installPhase = "install -D main $out/bin/${finalAttrs.pname}";
+      buildPhase = "ghc main.hs -o pyrofc";
+      installPhase = "install -D pyrofc $out/bin/${finalAttrs.pname}";
     });
   });
 
